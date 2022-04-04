@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context};
@@ -100,13 +100,7 @@ fn ssh_run(state: State, cmd: &str) -> anyhow::Result<()> {
         let mut proc_stdout = stdout_channel.read().unwrap().stream(0);
         let mut self_stdout = io::stdout().lock();
 
-        let mut buf = [0; 0x4000];
-        while let Ok(n) = proc_stdout.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            self_stdout.write(&buf[..n])?;
-        }
+        io::copy(&mut proc_stdout, &mut self_stdout)?;
 
         Ok(())
     });
@@ -115,13 +109,7 @@ fn ssh_run(state: State, cmd: &str) -> anyhow::Result<()> {
         let mut proc_stderr = stderr_channel.read().unwrap().stream(1);
         let mut self_stderr = io::stderr().lock();
 
-        let mut buf = [0; 0x4000];
-        while let Ok(n) = proc_stderr.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            self_stderr.write(&buf[..n])?;
-        }
+        io::copy(&mut proc_stderr, &mut self_stderr)?;
 
         Ok(())
     });
