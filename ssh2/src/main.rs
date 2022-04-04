@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context};
 
@@ -70,7 +71,7 @@ fn ssh_auth_by_pk() -> anyhow::Result<State> {
     })
 }
 
-fn ssh_exec_auth_by_pass() -> anyhow::Result<State> {
+fn ssh_auth_by_pass() -> anyhow::Result<State> {
     ssh_auth(|state| {
         let State {
             session, username, ..
@@ -82,29 +83,68 @@ fn ssh_exec_auth_by_pass() -> anyhow::Result<State> {
     })
 }
 
-fn ssh_run_command(state: State) -> anyhow::Result<()> {
+fn ssh_run(state: State, cmd: &str) -> anyhow::Result<()> {
     let State { session, .. } = state;
     let mut channel = session.channel_session()?;
 
-    channel.exec(CMD)?;
+    channel.exec(cmd)?;
 
-    let mut buf = [0; 0x4000];
-    let mut self_stdout = io::stdout().lock();
-    let mut proc_stdout = channel.stream(0);
-    while let Ok(n) = proc_stdout.read(&mut buf) {
-        if n == 0 {
-            break;
+    let channel = Arc::new(RwLock::new(channel));
+
+    println!("============================");
+
+    let stdout_channel = channel.clone();
+    let stderr_channel = channel.clone();
+
+    let stdout_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
+        let mut proc_stdout = stdout_channel.read().unwrap().stream(0);
+        let mut self_stdout = io::stdout().lock();
+
+        let mut buf = [0; 0x4000];
+        while let Ok(n) = proc_stdout.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            self_stdout.write(&buf[..n])?;
         }
-        self_stdout.write(&buf[..n])?;
-    }
+
+        Ok(())
+    });
+
+    let stderr_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
+        let mut proc_stderr = stderr_channel.read().unwrap().stream(1);
+        let mut self_stderr = io::stderr().lock();
+
+        let mut buf = [0; 0x4000];
+        while let Ok(n) = proc_stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            self_stderr.write(&buf[..n])?;
+        }
+
+        Ok(())
+    });
+
+    stdout_streamer.join().unwrap()?;
+    stderr_streamer.join().unwrap()?;
+
+    let mut channel = channel.write().unwrap();
     channel.wait_close()?;
-    println!("{}", channel.exit_status()?);
+    println!("============================");
+    println!(
+        "\x1b[36mThe process exited with code {}\x1b[0m",
+        channel.exit_status()?
+    );
     Ok(())
 }
 
 const CMD: &'static str = r#"{
-    echo "\x1b[33mstderr: hello\x1b[0m" > /dev/stderr;
-    echo "\x1b[34mstdout: world\x1b[0m" > /dev/stdout;
+    for _ in {1..5}; do
+        echo "\x1b[33mstderr: hello\x1b[0m" > /dev/stderr;
+        echo "\x1b[34mstdout: world\x1b[0m" > /dev/stdout;
+        sleep 1
+    done
 }"#;
 
 fn main() {
@@ -113,12 +153,12 @@ fn main() {
         not(all(feature = "publickey", feature = "password"))
     )) {
         if cfg!(feature = "publickey") {
-            match ssh_auth_by_pk().and_then(ssh_run_command) {
+            match ssh_auth_by_pk().and_then(|state| ssh_run(state, CMD)) {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             };
         } else if cfg!(feature = "password") {
-            match ssh_exec_auth_by_pass().and_then(ssh_run_command) {
+            match ssh_auth_by_pass().and_then(|state| ssh_run(state, CMD)) {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             }
@@ -127,6 +167,6 @@ fn main() {
         return;
     }
 
-    println!("please specify --features with either publickey or password");
+    println!("please specify --features with *either* publickey or password");
     std::process::exit(1);
 }
