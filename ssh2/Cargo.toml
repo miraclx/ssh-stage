@@ -1,0 +1,13 @@
+[package]
+name = "test-ssh2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ssh2 = "0.9.3"
+anyhow = "1.0.56"
+sshkeys = "0.3.2"
+
+[features]
+publickey = []
+password = []

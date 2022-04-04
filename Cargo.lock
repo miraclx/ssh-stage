@@ -230,15 +230,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 
 [[package]]
-name = "ssh-stage"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ssh2",
- "sshkeys",
-]
-
-[[package]]
 name = "ssh2"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,6 +250,15 @@ dependencies = [
  "base64",
  "byteorder",
  "sha2",
+]
+
+[[package]]
+name = "test-ssh2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ssh2",
+ "sshkeys",
 ]
 
 [[package]]

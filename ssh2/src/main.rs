@@ -102,18 +102,31 @@ fn ssh_run_command(state: State) -> anyhow::Result<()> {
     Ok(())
 }
 
-const CMD: &'static str = "{
-    echo '\x1b[33mstderr: hello\x1b[0m' > /dev/stderr;
-    echo '\x1b[34mstdout: world\x1b[0m' > /dev/stdout;
-}";
+const CMD: &'static str = r#"{
+    echo "\x1b[33mstderr: hello\x1b[0m" > /dev/stderr;
+    echo "\x1b[34mstdout: world\x1b[0m" > /dev/stdout;
+}"#;
 
 fn main() {
-    match ssh_auth_by_pk().and_then(ssh_run_command) {
-        Err(err) => println!("{:?}", err),
-        _ => {}
-    };
-    match ssh_exec_auth_by_pass().and_then(ssh_run_command) {
-        Err(err) => println!("{:?}", err),
-        _ => {}
+    if cfg!(all(
+        any(feature = "publickey", feature = "password"),
+        not(all(feature = "publickey", feature = "password"))
+    )) {
+        if cfg!(feature = "publickey") {
+            match ssh_auth_by_pk().and_then(ssh_run_command) {
+                Err(err) => println!("{:?}", err),
+                _ => {}
+            };
+        } else if cfg!(feature = "password") {
+            match ssh_exec_auth_by_pass().and_then(ssh_run_command) {
+                Err(err) => println!("{:?}", err),
+                _ => {}
+            }
+        }
+
+        return;
     }
+
+    println!("please specify --features with either publickey or password");
+    std::process::exit(1);
 }
