@@ -10,57 +10,44 @@ pub fn input(query: &str) -> io::Result<String> {
     Ok(input.trim().to_owned())
 }
 
-struct State<'a> {
-    session: &'a ssh2::Session,
-    agent: &'a mut ssh2::Agent,
-    username: &'a str,
+struct State {
+    session: ssh2::Session,
+    agent: ssh2::Agent,
+    username: String,
 }
 
-fn ssh<F: Fn(State) -> anyhow::Result<()>>(auther: F) -> anyhow::Result<()> {
+fn ssh_auth<F: Fn(&mut State) -> anyhow::Result<()>>(auther: F) -> anyhow::Result<State> {
     let addr = input("Enter the host address (e.g: localhost:22): ")?;
     let tcp = std::net::TcpStream::connect(addr)?;
-    let mut sess = ssh2::Session::new().context("failed to initialize an SSH session")?;
-    sess.set_tcp_stream(tcp);
-    sess.handshake()
+    let mut session = ssh2::Session::new().context("failed to initialize an SSH session")?;
+    session.set_tcp_stream(tcp);
+    session
+        .handshake()
         .context("failed to connect to the SSH session")?;
 
-    let mut agent = sess.agent().context("sess.agent()")?;
+    let mut agent = session.agent().context("sess.agent()")?;
 
     agent.connect().context("agent.connect()")?;
 
     let username = input("Enter a username to authorize: ")?;
 
-    auther(State {
-        session: &sess,
-        agent: &mut agent,
-        username: &username,
-    })?;
+    let mut state = State {
+        session,
+        agent,
+        username,
+    };
 
-    if !sess.authenticated() {
+    auther(&mut state)?;
+
+    if !state.session.authenticated() {
         bail!("authentication failure")
     }
 
-    let mut channel = sess.channel_session()?;
-
-    channel.exec("ls")?;
-
-    let mut buf = [0; 0x4000];
-    let mut self_stdout = io::stdout().lock();
-    let mut proc_stdout = channel.stream(0);
-    while let Ok(n) = proc_stdout.read(&mut buf) {
-        if n == 0 {
-            break;
-        }
-        self_stdout.write(&buf[..n])?;
-    }
-    channel.wait_close()?;
-    println!("{}", channel.exit_status()?);
-
-    Ok(())
+    Ok(state)
 }
 
-fn ssh_auth_by_pk() -> anyhow::Result<()> {
-    ssh(|state| {
+fn ssh_auth_by_pk() -> anyhow::Result<State> {
+    ssh_auth(|state| {
         let State {
             agent, username, ..
         } = state;
@@ -82,8 +69,9 @@ fn ssh_auth_by_pk() -> anyhow::Result<()> {
         Ok(())
     })
 }
-fn ssh_auth_by_pass() -> anyhow::Result<()> {
-    ssh(|state| {
+
+fn ssh_exec_auth_by_pass() -> anyhow::Result<State> {
+    ssh_auth(|state| {
         let State {
             session, username, ..
         } = state;
@@ -94,12 +82,37 @@ fn ssh_auth_by_pass() -> anyhow::Result<()> {
     })
 }
 
+fn ssh_run_command(state: State) -> anyhow::Result<()> {
+    let State { session, .. } = state;
+    let mut channel = session.channel_session()?;
+
+    channel.exec(CMD)?;
+
+    let mut buf = [0; 0x4000];
+    let mut self_stdout = io::stdout().lock();
+    let mut proc_stdout = channel.stream(0);
+    while let Ok(n) = proc_stdout.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        self_stdout.write(&buf[..n])?;
+    }
+    channel.wait_close()?;
+    println!("{}", channel.exit_status()?);
+    Ok(())
+}
+
+const CMD: &'static str = "{
+    echo '\x1b[33mstderr: hello\x1b[0m' > /dev/stderr;
+    echo '\x1b[34mstdout: world\x1b[0m' > /dev/stdout;
+}";
+
 fn main() {
-    match ssh_auth_by_pk() {
+    match ssh_auth_by_pk().and_then(ssh_run_command) {
         Err(err) => println!("{:?}", err),
         _ => {}
-    }
-    match ssh_auth_by_pass() {
+    };
+    match ssh_exec_auth_by_pass().and_then(ssh_run_command) {
         Err(err) => println!("{:?}", err),
         _ => {}
     }
