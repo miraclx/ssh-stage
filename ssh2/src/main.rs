@@ -69,11 +69,11 @@ fn ssh_auth_by_pass() -> anyhow::Result<State> {
     })
 }
 
-fn ssh_run(state: State, cmd: &str) -> anyhow::Result<()> {
-    let State { session, .. } = state;
+fn ssh_run(state: anyhow::Result<State>) -> anyhow::Result<()> {
+    let State { session, .. } = state?;
     let mut channel = session.channel_session()?;
 
-    channel.exec(cmd)?;
+    channel.exec(CMD)?;
 
     let channel = Arc::new(RwLock::new(channel));
 
@@ -159,12 +159,12 @@ fn main() {
         not(all(feature = "publickey", feature = "password"))
     )) {
         if cfg!(feature = "publickey") {
-            match ssh_auth_by_pk().and_then(|state| ssh_run(state, CMD)) {
+            match ssh_run(ssh_auth_by_pk()) {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             };
         } else if cfg!(feature = "password") {
-            match ssh_auth_by_pass().and_then(|state| ssh_run(state, CMD)) {
+            match ssh_run(ssh_auth_by_pass()) {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             }
