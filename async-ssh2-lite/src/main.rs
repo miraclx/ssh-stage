@@ -23,42 +23,33 @@ pub fn input(query: &str) -> std::io::Result<String> {
     Ok(input.trim().to_owned())
 }
 
-struct SshState {
-    session: AsyncSession<TcpStream>,
-    username: String,
-}
+type SshSession = AsyncSession<TcpStream>;
 
-async fn ssh_auth<F, R>(
-    addr: SocketAddr,
-    username: String,
-    auther: F,
-) -> anyhow::Result<Arc<SshState>>
+async fn ssh_auth<F, R>(addr: SocketAddr, auther: F) -> anyhow::Result<Arc<SshSession>>
 where
-    F: Fn(Arc<SshState>) -> R,
+    F: FnOnce(Arc<SshSession>) -> R,
     R: Future<Output = anyhow::Result<()>>,
 {
     let stream = Async::<TcpStream>::connect(addr).await?;
     let mut session = AsyncSession::new(stream, None)?;
     session.handshake().await?;
 
-    let state = Arc::new(SshState { session, username });
+    let session = Arc::new(session);
 
-    auther(state.clone()).await?;
+    auther(session.clone()).await?;
 
-    if !state.session.authenticated() {
-        return Err(state
-            .session
+    if !session.authenticated() {
+        return Err(session
             .last_error()
             .map(Into::into)
-            .unwrap_or(anyhow!("unknown userauth error")));
+            .unwrap_or_else(|| anyhow!("unknown userauth error")));
     }
 
-    Ok(state)
+    Ok(session)
 }
 
-async fn ssh_auth_by_pk(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshState>> {
-    ssh_auth(addr, username, |state| async move {
-        let SshState { session, username } = &*state;
+async fn ssh_auth_by_pk(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshSession>> {
+    ssh_auth(addr, move |session| async move {
         let mut agent = session.agent()?;
         agent.connect().await?;
 
@@ -80,21 +71,20 @@ async fn ssh_auth_by_pk(addr: SocketAddr, username: String) -> anyhow::Result<Ar
     .await
 }
 
-async fn ssh_auth_by_pass(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshState>> {
-    ssh_auth(addr, username, |state| async move {
-        let SshState { session, username } = &*state;
+async fn ssh_auth_by_pass(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshSession>> {
+    ssh_auth(addr, move |session| async move {
         let password = input("Enter the password for this user: ")?;
-        session.userauth_password(username, &password).await?;
+        session.userauth_password(&username, &password).await?;
 
         Ok(())
     })
     .await
 }
 
-async fn ssh_run<F: Future<Output = anyhow::Result<Arc<SshState>>>>(
-    state: F,
+async fn ssh_run<F: Future<Output = anyhow::Result<Arc<SshSession>>>>(
+    session: F,
 ) -> anyhow::Result<()> {
-    let SshState { session, .. } = &*state.await?;
+    let session = session.await?;
     let mut channel = session.channel_session().await?;
 
     channel.exec(CMD).await?;
@@ -135,7 +125,7 @@ fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
         .ok_or_else(|| unreachable!("oops, took a wrong turn"))
 }
 
-const CMD: &'static str = r#"{
+const CMD: &str = r#"{
     for _ in {1..5}; do
         echo "\x1b[33mstderr: hello\x1b[0m" > /dev/stderr;
         echo "\x1b[34mstdout: world\x1b[0m" > /dev/stdout;
@@ -158,14 +148,12 @@ async fn main() -> anyhow::Result<()> {
         not(all(feature = "publickey", feature = "password"))
     )) {
         if cfg!(feature = "publickey") {
-            match ssh_run(ssh_auth_by_pk(addr, username)).await {
-                Err(err) => println!("{:?}", err),
-                _ => {}
-            };
+            if let Err(err) = ssh_run(ssh_auth_by_pk(addr, username)).await {
+                println!("{:?}", err);
+            }
         } else if cfg!(feature = "password") {
-            match ssh_run(ssh_auth_by_pass(addr, username)).await {
-                Err(err) => println!("{:?}", err),
-                _ => {}
+            if let Err(err) = ssh_run(ssh_auth_by_pass(addr, username)).await {
+                println!("{:?}", err);
             }
         }
 
