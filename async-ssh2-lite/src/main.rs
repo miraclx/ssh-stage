@@ -26,10 +26,10 @@ fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
         .ok_or_else(|| unreachable!("oops, took a wrong turn"))
 }
 
-async fn ssh_auth<'a, F, R>(auther: F) -> anyhow::Result<Arc<SshState>>
+async fn ssh_auth<F, R>(auther: F) -> anyhow::Result<Arc<SshState>>
 where
     F: Fn(Arc<SshState>) -> R,
-    R: Future<Output = anyhow::Result<()>> + 'a,
+    R: Future<Output = anyhow::Result<()>>,
 {
     let addr = input("Enter the host address (e.g: localhost:22): ")?;
     let addr = parse_addr(&addr).context("no valid addresses found")?;
@@ -107,16 +107,15 @@ async fn ssh_run<F: Future<Output = anyhow::Result<Arc<SshState>>>>(
     let mut remote_stderr = channel.stream(1).compat();
 
     println!("============================");
-
     let stdin_proc = tokio::io::copy(&mut self_stdin, &mut remote_stdin);
     let stdout_proc = tokio::io::copy(&mut remote_stdout, &mut self_stdout);
     let stderr_proc = tokio::io::copy(&mut remote_stderr, &mut self_stderr);
 
     tokio::try_join!(stdin_proc, stdout_proc, stderr_proc)?;
+    println!("============================");
 
     channel.close().await?;
     channel.wait_close().await?;
-    println!("============================");
     println!(
         "\x1b[36mThe process exited with code {}\x1b[0m",
         channel.exit_status()?
