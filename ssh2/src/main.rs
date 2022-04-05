@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context};
@@ -93,27 +93,59 @@ fn ssh_run(state: State, cmd: &str) -> anyhow::Result<()> {
 
     println!("============================");
 
+    let stdin_channel = channel.clone();
     let stdout_channel = channel.clone();
     let stderr_channel = channel.clone();
 
-    let stdout_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
-        let mut proc_stdout = stdout_channel.read().unwrap().stream(0);
-        let mut self_stdout = io::stdout().lock();
+    let stdin_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
+        let channel = stdin_channel.read().unwrap();
+        let mut stdin = io::stdin().lock();
 
-        io::copy(&mut proc_stdout, &mut self_stdout)?;
+        let mut buf = [0; 0x4000];
+        while let Ok(n) = stdin.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+
+            channel.stream(0).write(&buf[..n])?;
+        }
+
+        Ok(())
+    });
+
+    let stdout_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
+        let channel = stdout_channel.read().unwrap();
+        let mut stdout = io::stdout().lock();
+
+        let mut buf = [0; 0x4000];
+        while let Ok(n) = channel.stream(0).read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+
+            stdout.write(&buf[..n])?;
+        }
 
         Ok(())
     });
 
     let stderr_streamer = std::thread::spawn(move || -> anyhow::Result<()> {
-        let mut proc_stderr = stderr_channel.read().unwrap().stream(1);
-        let mut self_stderr = io::stderr().lock();
+        let channel = stderr_channel.read().unwrap();
+        let mut stderr = io::stderr().lock();
 
-        io::copy(&mut proc_stderr, &mut self_stderr)?;
+        let mut buf = [0; 0x4000];
+        while let Ok(n) = channel.stream(1).read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+
+            stderr.write(&buf[..n])?;
+        }
 
         Ok(())
     });
 
+    stdin_streamer.join().unwrap()?;
     stdout_streamer.join().unwrap()?;
     stderr_streamer.join().unwrap()?;
 
