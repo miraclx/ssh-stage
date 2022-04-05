@@ -1,11 +1,19 @@
+/*
+cargo run -p test-async-ssh2-lite --features password -- 127.0.0.1:22 root
+
+// - or -
+
+cargo run -p test-async-ssh2-lite --features publickey -- 127.0.0.1:22 root
+*/
+
 use std::future::Future;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use async_compat::CompatExt;
 use async_io::Async;
-use async_ssh2::AsyncSession;
+use async_ssh2_lite::AsyncSession;
 
 pub fn input(query: &str) -> std::io::Result<String> {
     print!("{}", query);
@@ -20,25 +28,18 @@ struct SshState {
     username: String,
 }
 
-fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
-    addr.to_socket_addrs()?
-        .next()
-        .ok_or_else(|| unreachable!("oops, took a wrong turn"))
-}
-
-async fn ssh_auth<F, R>(auther: F) -> anyhow::Result<Arc<SshState>>
+async fn ssh_auth<F, R>(
+    addr: SocketAddr,
+    username: String,
+    auther: F,
+) -> anyhow::Result<Arc<SshState>>
 where
     F: Fn(Arc<SshState>) -> R,
     R: Future<Output = anyhow::Result<()>>,
 {
-    let addr = input("Enter the host address (e.g: localhost:22): ")?;
-    let addr = parse_addr(&addr).context("no valid addresses found")?;
-
     let stream = Async::<TcpStream>::connect(addr).await?;
     let mut session = AsyncSession::new(stream, None)?;
     session.handshake().await?;
-
-    let username = input("Enter a username to authorize: ")?;
 
     let state = Arc::new(SshState { session, username });
 
@@ -55,8 +56,8 @@ where
     Ok(state)
 }
 
-async fn ssh_auth_by_pk() -> anyhow::Result<Arc<SshState>> {
-    ssh_auth(|state| async move {
+async fn ssh_auth_by_pk(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshState>> {
+    ssh_auth(addr, username, |state| async move {
         let SshState { session, username } = &*state;
         let mut agent = session.agent()?;
         agent.connect().await?;
@@ -79,8 +80,8 @@ async fn ssh_auth_by_pk() -> anyhow::Result<Arc<SshState>> {
     .await
 }
 
-async fn ssh_auth_by_pass() -> anyhow::Result<Arc<SshState>> {
-    ssh_auth(|state| async move {
+async fn ssh_auth_by_pass(addr: SocketAddr, username: String) -> anyhow::Result<Arc<SshState>> {
+    ssh_auth(addr, username, |state| async move {
         let SshState { session, username } = &*state;
         let password = input("Enter the password for this user: ")?;
         session.userauth_password(username, &password).await?;
@@ -132,26 +133,40 @@ const CMD: &'static str = r#"{
 }"#;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
+    let addr = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:22".to_owned());
+
+    let addr = parse_addr(&addr)?;
+
+    let username = std::env::args().nth(2).unwrap_or_else(|| "root".to_owned());
+
     if cfg!(all(
         any(feature = "publickey", feature = "password"),
         not(all(feature = "publickey", feature = "password"))
     )) {
         if cfg!(feature = "publickey") {
-            match ssh_run(ssh_auth_by_pk()).await {
+            match ssh_run(ssh_auth_by_pk(addr, username)).await {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             };
         } else if cfg!(feature = "password") {
-            match ssh_run(ssh_auth_by_pass()).await {
+            match ssh_run(ssh_auth_by_pass(addr, username)).await {
                 Err(err) => println!("{:?}", err),
                 _ => {}
             }
         }
 
-        return;
+        return Ok(());
     }
 
     println!("please specify --features with *either* publickey or password");
     std::process::exit(1);
+}
+
+fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
+    addr.to_socket_addrs()?
+        .next()
+        .ok_or_else(|| unreachable!("oops, took a wrong turn"))
 }
