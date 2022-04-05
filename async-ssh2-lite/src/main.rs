@@ -112,7 +112,12 @@ async fn ssh_run<F: Future<Output = anyhow::Result<Arc<SshState>>>>(
     let stdout_proc = tokio::io::copy(&mut remote_stdout, &mut self_stdout);
     let stderr_proc = tokio::io::copy(&mut remote_stderr, &mut self_stderr);
 
-    tokio::try_join!(stdin_proc, stdout_proc, stderr_proc)?;
+    let stdio = async { tokio::try_join!(stdin_proc, stdout_proc, stderr_proc) };
+
+    tokio::select! {
+        r = stdio => { r?; },
+        r = channel.wait_eof().compat() => { r?; }
+    }
     println!("============================");
 
     channel.close().await?;
@@ -122,6 +127,12 @@ async fn ssh_run<F: Future<Output = anyhow::Result<Arc<SshState>>>>(
         channel.exit_status()?
     );
     Ok(())
+}
+
+fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
+    addr.to_socket_addrs()?
+        .next()
+        .ok_or_else(|| unreachable!("oops, took a wrong turn"))
 }
 
 const CMD: &'static str = r#"{
@@ -161,12 +172,6 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("please specify --features with *either* publickey or password");
+    println!("please specify --features with *either* `publickey` or `password`");
     std::process::exit(1);
-}
-
-fn parse_addr(addr: &str) -> anyhow::Result<SocketAddr> {
-    addr.to_socket_addrs()?
-        .next()
-        .ok_or_else(|| unreachable!("oops, took a wrong turn"))
 }
