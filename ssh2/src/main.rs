@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 
 pub fn input(query: &str) -> io::Result<String> {
     print!("{}", query);
@@ -13,30 +13,19 @@ pub fn input(query: &str) -> io::Result<String> {
 
 struct State {
     session: ssh2::Session,
-    agent: ssh2::Agent,
     username: String,
 }
 
 fn ssh_auth<F: Fn(&mut State) -> anyhow::Result<()>>(auther: F) -> anyhow::Result<State> {
     let addr = input("Enter the host address (e.g: localhost:22): ")?;
     let tcp = std::net::TcpStream::connect(addr)?;
-    let mut session = ssh2::Session::new().context("failed to initialize an SSH session")?;
+    let mut session = ssh2::Session::new()?;
     session.set_tcp_stream(tcp);
-    session
-        .handshake()
-        .context("failed to connect to the SSH session")?;
-
-    let mut agent = session.agent().context("sess.agent()")?;
-
-    agent.connect().context("agent.connect()")?;
+    session.handshake()?;
 
     let username = input("Enter a username to authorize: ")?;
 
-    let mut state = State {
-        session,
-        agent,
-        username,
-    };
+    let mut state = State { session, username };
 
     auther(&mut state)?;
 
@@ -49,12 +38,13 @@ fn ssh_auth<F: Fn(&mut State) -> anyhow::Result<()>>(auther: F) -> anyhow::Resul
 
 fn ssh_auth_by_pk() -> anyhow::Result<State> {
     ssh_auth(|state| {
-        let State {
-            agent, username, ..
-        } = state;
+        let State { session, username } = state;
+        let mut agent = session.agent()?;
+        agent.connect()?;
+
         let publickey = input("Paste the public key for this user: ")?;
 
-        agent.list_identities().context("agent.list_identities()")?;
+        agent.list_identities()?;
 
         let user_identity = sshkeys::PublicKey::from_string(&publickey)?.encode();
         let identity = agent
@@ -63,9 +53,7 @@ fn ssh_auth_by_pk() -> anyhow::Result<State> {
             .find(|identity| user_identity == identity.blob())
             .ok_or_else(|| anyhow!("failed to match an authenticated identity"))?;
 
-        agent
-            .userauth(&username, &identity)
-            .context("agent.userauth()")?;
+        agent.userauth(&username, &identity)?;
 
         Ok(())
     })
@@ -73,9 +61,7 @@ fn ssh_auth_by_pk() -> anyhow::Result<State> {
 
 fn ssh_auth_by_pass() -> anyhow::Result<State> {
     ssh_auth(|state| {
-        let State {
-            session, username, ..
-        } = state;
+        let State { session, username } = state;
         let password = input("Enter the password for this user: ")?;
         session.userauth_password(username, &password)?;
 
