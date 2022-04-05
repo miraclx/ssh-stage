@@ -1,0 +1,16 @@
+[package]
+name = "test-async-ssh2-lite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-io = "1.6.0"
+async-ssh2 = { package = "async-ssh2-lite", version = "0.2.1" }
+async-compat = "0.2.1"
+anyhow = "1.0.56"
+sshkeys = "0.3.2"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+publickey = []
+password = []

@@ -1,4 +1,5 @@
 [workspace]
 members = [
   "ssh2",
+  "async-ssh2-lite",
 ]
